@@ -1,0 +1,158 @@
+{
+  "vcp_base_url": {
+    "description": "VCPToolBox 服务地址",
+    "type": "string",
+    "hint": "例如 http://127.0.0.1:8000",
+    "default": "http://127.0.0.1:8000"
+  },
+  "vcp_api_key": {
+    "description": "VCPToolBox Bearer Token",
+    "type": "string",
+    "obvious_hint": true,
+    "default": ""
+  },
+  "model": {
+    "description": "模型名称",
+    "type": "string",
+    "default": "gpt-4o-mini"
+  },
+  "system_prompt": {
+    "description": "Agent系统提示词",
+    "type": "text",
+    "default": "你是一个可靠的群聊 AI Agent 助手。"
+  },
+  "temperature": {
+    "description": "采样温度",
+    "type": "float",
+    "default": 0.7,
+    "slider": {
+      "min": 0,
+      "max": 2,
+      "step": 0.1
+    }
+  },
+  "stream": {
+    "description": "是否使用流式响应",
+    "type": "bool",
+    "default": true
+  },
+  "history_window_size": {
+    "description": "参与上下文的历史条数",
+    "type": "int",
+    "default": 20
+  },
+  "history_storage_path": {
+    "description": "聊天记录保存目录（为空时使用 data/plugin_data/<插件名>/conversations）",
+    "type": "string",
+    "default": ""
+  },
+  "render_tool_calls": {
+    "description": "是否在群聊中显示工具调用摘要",
+    "type": "bool",
+    "default": true
+  },
+  "tool_call_render_mode": {
+    "description": "工具调用摘要样式",
+    "type": "string",
+    "default": "compact",
+    "options": ["compact", "verbose"]
+  },
+  "enable_image_input": {
+    "description": "是否提取用户消息图片并传给后端",
+    "type": "bool",
+    "default": true
+  },
+  "enable_image_output": {
+    "description": "是否把回复中的图片地址渲染为图片消息",
+    "type": "bool",
+    "default": true
+  },
+  "mention_required_in_group": {
+    "description": "群聊中是否要求 @机器人 才自动触发",
+    "type": "bool",
+    "default": false
+  },
+  "rules": {
+    "description": "自动触发规则（模板列表）",
+    "type": "template_list",
+    "default": [],
+    "templates": {
+      "group_whitelist": {
+        "name": "群白名单规则",
+        "items": {
+          "enabled": {
+            "description": "启用该规则",
+            "type": "bool",
+            "default": true
+          },
+          "group_ids": {
+            "description": "允许触发的群号列表",
+            "type": "list",
+            "default": []
+          },
+          "probability": {
+            "description": "命中概率 0~1",
+            "type": "float",
+            "default": 1.0,
+            "slider": {
+              "min": 0,
+              "max": 1,
+              "step": 0.01
+            }
+          }
+        }
+      },
+      "mention": {
+        "name": "@触发规则",
+        "items": {
+          "enabled": {
+            "description": "启用该规则",
+            "type": "bool",
+            "default": true
+          },
+          "probability": {
+            "description": "命中概率 0~1",
+            "type": "float",
+            "default": 1.0,
+            "slider": {
+              "min": 0,
+              "max": 1,
+              "step": 0.01
+            }
+          }
+        }
+      },
+      "keyword": {
+        "name": "关键词触发规则",
+        "items": {
+          "enabled": {
+            "description": "启用该规则",
+            "type": "bool",
+            "default": true
+          },
+          "keywords": {
+            "description": "关键词列表",
+            "type": "list",
+            "default": []
+          },
+          "match_mode": {
+            "description": "匹配模式",
+            "type": "string",
+            "default": "contains",
+            "options": ["contains", "exact", "regex"]
+          },
+          "probability": {
+            "description": "命中概率 0~1",
+            "type": "float",
+            "default": 1.0,
+            "slider": {
+              "min": 0,
+              "max": 1,
+              "step": 0.01
+            }
+          }
+        }
+      }
+    }
+  }
+}
