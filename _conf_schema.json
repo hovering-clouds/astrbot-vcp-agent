@@ -46,16 +46,11 @@
     "type": "string",
     "default": ""
   },
-  "render_tool_calls": {
-    "description": "是否在群聊中显示工具调用摘要",
-    "type": "bool",
-    "default": true
-  },
   "tool_call_render_mode": {
     "description": "工具调用摘要样式",
     "type": "string",
     "default": "compact",
-    "options": ["compact", "verbose"]
+    "options": ["none", "compact", "verbose"]
   },
   "enable_image_input": {
     "description": "是否提取用户消息图片并传给后端",

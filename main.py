@@ -6,6 +6,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from typing import AsyncGenerator
 
 import httpx
 
@@ -42,7 +43,7 @@ def _normalize_text_content(content: Any) -> str:
                     image_obj = item.get("image_url", {})
                     image_url = image_obj.get("url", "")
                     if image_url:
-                        chunks.append(f"[图片] {image_url}")
+                        chunks.append(f"![图片] {image_url}")
                 else:
                     chunks.append(str(item))
             else:
@@ -76,7 +77,10 @@ def _rewrite_tool_calls(content: str, mode: str = "compact") -> tuple[str, list[
             if args_text:
                 return f"\n[🔧 工具调用] {tool_name}({args_text})\n"
             return f"\n[🔧 工具调用] {tool_name}\n"
-        return f"\n[🔧 调用工具: {tool_name}]\n"
+        elif mode == "compact":
+            return f"\n[🔧 调用工具: {tool_name}]\n"
+        else:
+            return "\n"
 
     new_content = TOOL_REQUEST_RE.sub(_replace, content)
     return new_content.strip(), tool_calls
@@ -365,7 +369,7 @@ class VCPAgentPlugin(Star):
         self,
         messages: list[dict[str, Any]],
         stream: bool,
-    ) -> tuple[str, list[dict[str, str]], list[str]]:
+    ) -> AsyncGenerator[tuple[str, list[dict[str, str]], list[str]], None]:
         if not self.http_client:
             raise RuntimeError("HTTP client not initialized")
 
@@ -373,6 +377,8 @@ class VCPAgentPlugin(Star):
         api_key = str(self.config.get("vcp_api_key", ""))
         model = str(self.config.get("model", "gpt-4o-mini"))
         temperature = float(self.config.get("temperature", 0.7) or 0.7)
+        mode = str(self.config.get("tool_call_render_mode", "compact"))
+        enable_image_output = bool(self.config.get("enable_image_output", True))
 
         headers = {"Content-Type": "application/json"}
         if api_key:
@@ -385,12 +391,8 @@ class VCPAgentPlugin(Star):
             "stream": stream,
         }
 
-        raw_text_acc = ""
-        rewritten_full = ""
-        collected_tools: list[dict[str, str]] = []
-        emitted_images: list[str] = []
-
         if stream:
+            pending = ""
             async with self.http_client.stream(
                 "POST",
                 f"{base_url}/v1/chat/completions",
@@ -398,7 +400,6 @@ class VCPAgentPlugin(Star):
                 json=payload,
             ) as resp:
                 resp.raise_for_status()
-                pending = ""
                 async for line in resp.aiter_lines():
                     if not line or not line.startswith("data:"):
                         continue
@@ -419,34 +420,23 @@ class VCPAgentPlugin(Star):
                     chunk_text = _normalize_text_content(delta.get("content", ""))
                     if not chunk_text:
                         continue
-                    raw_text_acc += chunk_text
-
-                    merged = pending + chunk_text
-                    if "<<<[TOOL_REQUEST]>>>" in merged and "<<<[END_TOOL_REQUEST]>>>" not in merged:
-                        start_idx = merged.find("<<<[TOOL_REQUEST]>>>")
-                        safe_prefix = merged[:start_idx]
-                        pending = merged[start_idx:]
-                    else:
-                        safe_prefix = merged
+                    pending += chunk_text
+                    if "<<<[TOOL_REQUEST]>>>" in pending and "<<<[END_TOOL_REQUEST]>>>" in pending:
+                        rewritten, tools = _rewrite_tool_calls(pending, mode=mode)
+                        emitted_images: list[str] = []
+                        if enable_image_output:
+                            rewritten, emitted_images = _extract_image_urls_from_text(rewritten)
                         pending = ""
-
-                    rewritten, tools = _rewrite_tool_calls(
-                        safe_prefix,
-                        mode=str(self.config.get("tool_call_render_mode", "compact")),
-                    )
-                    if tools:
-                        collected_tools.extend(tools)
-                    rewritten_full += rewritten
-
-                if pending:
-                    rewritten, tools = _rewrite_tool_calls(
-                        pending,
-                        mode=str(self.config.get("tool_call_render_mode", "compact")),
-                    )
-                    if tools:
-                        collected_tools.extend(tools)
-                    rewritten_full += rewritten
-                    raw_text_acc += pending
+                        yield rewritten, tools, emitted_images
+                
+                # 最后剩余的消息
+                if pending.strip():
+                    rewritten, tools = _rewrite_tool_calls(pending, mode=mode)
+                    emitted_images: list[str] = []
+                    if enable_image_output:
+                        rewritten, emitted_images = _extract_image_urls_from_text(rewritten)
+                    yield rewritten, tools, emitted_images
+        
         else:
             resp = await self.http_client.post(
                 f"{base_url}/v1/chat/completions",
@@ -461,32 +451,16 @@ class VCPAgentPlugin(Star):
             choices = data.get("choices") or []
             if choices:
                 message = choices[0].get("message", {})
-                raw_text_acc = _normalize_text_content(message.get("content", ""))
-                rewritten_full, collected_tools = _rewrite_tool_calls(
-                    raw_text_acc,
-                    mode=str(self.config.get("tool_call_render_mode", "compact")),
-                )
-
-        # 最后一次性处理 rewritten_full，确保任何未被替换的工具块都被处理
-        # (特别是在流式处理中，工具块可能跨越多个 chunk)
-        final_rewritten, final_tools = _rewrite_tool_calls(
-            rewritten_full,
-            mode=str(self.config.get("tool_call_render_mode", "compact")),
-        )
-        if final_tools:
-            collected_tools.extend(final_tools)
-        rewritten_full = final_rewritten
-
-        if not self.config.get("render_tool_calls", True):
-            rewritten_full = TOOL_REQUEST_RE.sub("", rewritten_full).strip()
-
-        if self.config.get("enable_image_output", True):
-            rewritten_full, emitted_images = _extract_image_urls_from_text(rewritten_full)
-
-        if raw_text_acc.strip().startswith("[ERROR]"):
-            raise RuntimeError(raw_text_acc.strip())
-
-        return raw_text_acc, collected_tools, [rewritten_full, *emitted_images]
+                raw_text = _normalize_text_content(message.get("content", ""))
+                if raw_text:
+                    rewritten_full, collected_tools = _rewrite_tool_calls(
+                        raw_text,
+                        mode=mode,
+                    )
+                    emitted_images: list[str] = []
+                    if enable_image_output:
+                        rewritten_full, emitted_images = _extract_image_urls_from_text(rewritten_full)
+                    yield rewritten_full, collected_tools, emitted_images
 
     async def _run_agent(self, event: AstrMessageEvent, prompt: str):
         if not self.history_store:
@@ -540,39 +514,40 @@ class VCPAgentPlugin(Star):
         )
 
         stream = bool(self.config.get("stream", True))
-        raw_text, tool_calls, response_parts = await self._call_vcp(message_list, stream)
-        
-        logger.info(f"[{session_id}] VCP response (len={len(raw_text)}): {raw_text[:100]}...")
+        raw_text_lst: list[str] = []
+        tool_calls: list[dict[str, Any]] = []
+        emitted_images: list[str] = []
 
-        reply_text = response_parts[0] if response_parts else ""
-        reply_images = response_parts[1:] if len(response_parts) > 1 else []
+        async for raw_text, tools, images in self._call_vcp(message_list, stream):
+            raw_text_lst.append(raw_text)
+            tool_calls.extend(tools)
+            emitted_images.extend(images)
+            
+            chain: list[Any] = []
+            if raw_text:
+                chain.append(Comp.Plain(raw_text))
+            for url in images:
+                try:
+                    if url.startswith("http://") or url.startswith("https://"):
+                        chain.append(Comp.Image.fromURL(url))
+                    else:
+                        file_path = url[8:] if url.startswith("file:///") else url
+                        chain.append(Comp.Image.fromFileSystem(file_path))
+                except Exception:
+                    chain.append(Comp.Plain(f"[图片地址] {url}"))
+            if chain:
+                yield event.chain_result(chain)
+            else:
+                yield event.plain_result("(空响应)")
 
         await self.history_store.append_entry(
             session_id=session_id,
             role="assistant",
-            content=raw_text or reply_text,
+            content="\n".join(raw_text_lst).strip() or "[无文本响应]",
             sender_name=str(event.get_self_id() or "机器人"),
-            images=reply_images,
+            images=emitted_images,
             tool_calls=tool_calls,
         )
-
-        chain: list[Any] = []
-        if reply_text:
-            chain.append(Comp.Plain(reply_text))
-        for url in reply_images:
-            try:
-                if url.startswith("http://") or url.startswith("https://"):
-                    chain.append(Comp.Image.fromURL(url))
-                else:
-                    file_path = url[8:] if url.startswith("file:///") else url
-                    chain.append(Comp.Image.fromFileSystem(file_path))
-            except Exception:
-                chain.append(Comp.Plain(f"[图片地址] {url}"))
-
-        if chain:
-            yield event.chain_result(chain)
-        else:
-            yield event.plain_result("(空响应)")
 
     @filter.command("vcp")
     async def vcp_command(self, event: AstrMessageEvent):
