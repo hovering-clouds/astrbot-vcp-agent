@@ -312,56 +312,26 @@ class VCPAgentPlugin(Star):
         return f"data:{mime};base64,{bs}"
 
     def _is_mentioned(self, event: AstrMessageEvent) -> bool:
-        self_id = event.get_self_id()
-        for c in event.get_messages():
-            if isinstance(c, Comp.At):
-                target = str(getattr(c, "qq", ""))
-                if target == "all":
-                    return True
-                if self_id and target == str(self_id):
-                    return True
-        return False
+        return event.is_at_or_wake_command
 
     def _rule_hit(self, event: AstrMessageEvent) -> bool:
+        """检查是否通过群白名单规则。"""
         rules = self.config.get("rules", []) or []
         if not rules:
             return False
 
-        text = (event.message_str or "").strip()
         group_id = event.get_group_id()
-        mentioned = self._is_mentioned(event)
 
         for rule in rules:
             if not rule.get("enabled", True):
                 continue
             template = rule.get("__template_key", "")
-            probability = float(rule.get("probability", 1.0) or 1.0)
-            if random.random() > max(0.0, min(1.0, probability)):
+            if template != "group_whitelist":
                 continue
-
-            if template == "group_whitelist":
-                allow = {str(x) for x in (rule.get("group_ids", []) or [])}
-                if group_id and str(group_id) in allow:
-                    return True
-            elif template == "mention":
-                if mentioned:
-                    return True
-            elif template == "keyword":
-                keywords = [str(x) for x in (rule.get("keywords", []) or [])]
-                mode = str(rule.get("match_mode", "contains"))
-                for kw in keywords:
-                    if not kw:
-                        continue
-                    if mode == "exact" and text == kw:
-                        return True
-                    if mode == "regex":
-                        try:
-                            if re.search(kw, text):
-                                return True
-                        except re.error:
-                            continue
-                    if mode == "contains" and kw in text:
-                        return True
+            
+            allow = {str(x) for x in (rule.get("group_ids", []) or [])}
+            if group_id and str(group_id) in allow:
+                return True
 
         return False
 
@@ -462,12 +432,28 @@ class VCPAgentPlugin(Star):
                         rewritten_full, emitted_images = _extract_image_urls_from_text(rewritten_full)
                     yield rewritten_full, collected_tools, emitted_images
 
-    async def _run_agent(self, event: AstrMessageEvent, prompt: str):
+    async def _run_agent(self, event: AstrMessageEvent, prompt: str, skip_llm: bool = False):
         if not self.history_store:
             raise RuntimeError("History store not initialized")
 
         session_id = self._get_session_id(event)
         sender_name = self._get_sender_display_name(event)
+        
+        # 记录用户消息
+        images = self._extract_images_from_event(event)
+        await self.history_store.append_entry(
+            session_id=session_id,
+            role="user",
+            content=prompt.strip() or "[仅图片消息]",
+            sender_name=sender_name,
+            images=images,
+        )
+        
+        # 如果跳过LLM调用，直接返回
+        if skip_llm:
+            logger.info(f"[{session_id}] Skipping LLM call (mention_required_in_group enabled but not mentioned)")
+            return
+        
         history_limit = int(self.config.get("history_window_size", 20) or 20)
         history = await self.history_store.load_recent(session_id=session_id, limit=history_limit)
         
@@ -504,14 +490,6 @@ class VCPAgentPlugin(Star):
         if system_prompt:
             message_list.append({"role": "system", "content": system_prompt})
         message_list.append({"role": "user", "content": user_content})
-
-        await self.history_store.append_entry(
-            session_id=session_id,
-            role="user",
-            content=prompt.strip() or "[仅图片消息]",
-            sender_name=sender_name,
-            images=images,
-        )
 
         stream = bool(self.config.get("stream", True))
         raw_text_lst: list[str] = []
@@ -575,24 +553,33 @@ class VCPAgentPlugin(Star):
 
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE | EventMessageType.PRIVATE_MESSAGE)
     async def auto_trigger(self, event: AstrMessageEvent):
-        """自动触发：群白名单、@、关键词、概率。"""
+        """自动触发：群白名单规则。"""
         text = (event.message_str or "").strip()
 
+        # 基础检查
         if not text and not self._extract_images_from_event(event):
             return
         if text.startswith("/"):
             return
         if event.get_sender_id() and event.get_sender_id() == event.get_self_id():
             return
-        if event.get_group_id() and self.config.get("mention_required_in_group", False):
-            if not self._is_mentioned(event):
-                return
 
+        # 检查白名单规则（命中失败则完全不处理）
         if not self._rule_hit(event):
             return
 
+        # 白名单命中：确定是否跳过LLM调用
+        skip_llm = (
+            event.get_group_id()
+            and self.config.get("mention_required_in_group", False)
+            and not self._is_mentioned(event)
+        )
+        probability = float(self.config.get("probability", 1.0) or 1.0)
+        if random.random() > max(0.0, min(1.0, probability)):
+            skip_llm = True
+
         try:
-            async for result in self._run_agent(event, text):
+            async for result in self._run_agent(event, text, skip_llm=skip_llm):
                 yield result
         except Exception as e:
             logger.error(f"[astrbot-vcp-agent] auto_trigger failed: {e!s}")

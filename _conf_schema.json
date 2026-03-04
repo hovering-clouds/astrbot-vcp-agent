@@ -67,6 +67,16 @@
     "type": "bool",
     "default": false
   },
+  "probability": {
+    "description": "自动触发概率（0-1之间）",
+    "type": "float",
+    "default": 1.0,
+    "slider": {
+      "min": 0,
+      "max": 1,
+      "step": 0.01
+    }
+  },
   "rules": {
     "description": "自动触发规则（模板列表）",
     "type": "template_list",
@@ -84,67 +94,6 @@
             "description": "允许触发的群号列表",
             "type": "list",
             "default": []
-          },
-          "probability": {
-            "description": "命中概率 0~1",
-            "type": "float",
-            "default": 1.0,
-            "slider": {
-              "min": 0,
-              "max": 1,
-              "step": 0.01
-            }
-          }
-        }
-      },
-      "mention": {
-        "name": "@触发规则",
-        "items": {
-          "enabled": {
-            "description": "启用该规则",
-            "type": "bool",
-            "default": true
-          },
-          "probability": {
-            "description": "命中概率 0~1",
-            "type": "float",
-            "default": 1.0,
-            "slider": {
-              "min": 0,
-              "max": 1,
-              "step": 0.01
-            }
-          }
-        }
-      },
-      "keyword": {
-        "name": "关键词触发规则",
-        "items": {
-          "enabled": {
-            "description": "启用该规则",
-            "type": "bool",
-            "default": true
-          },
-          "keywords": {
-            "description": "关键词列表",
-            "type": "list",
-            "default": []
-          },
-          "match_mode": {
-            "description": "匹配模式",
-            "type": "string",
-            "default": "contains",
-            "options": ["contains", "exact", "regex"]
-          },
-          "probability": {
-            "description": "命中概率 0~1",
-            "type": "float",
-            "default": 1.0,
-            "slider": {
-              "min": 0,
-              "max": 1,
-              "step": 0.01
-            }
           }
         }
       }
